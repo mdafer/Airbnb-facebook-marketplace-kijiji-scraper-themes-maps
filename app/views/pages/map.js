@@ -15,7 +15,10 @@ function mapfunc()
 {
   setViewMode('map')
   visitedUrls = JSON.parse(localStorage.getItem('visitedUrls'+jobId)) || []
-  mapClearInformationWindow()
+  // Render the info panel from the persistent buffer (don't clear it — that's
+  // only for the trash button). This preserves the log across navigation.
+  if (typeof renderInfoMessages === 'function') renderInfoMessages()
+  else mapClearInformationWindow()
 
   $(".BStooltip").tooltip({ trigger: 'hover', container: 'body', placement: 'auto bottom' })
   var reader = new FileReader()
@@ -68,8 +71,8 @@ function mapUnload()
   $('#filtersForm').off('submit')
   $('#filtersModal').off('show.bs.modal')
   teardownSocketListeners()
-  // Detach drawing from map but preserve shape for other views
-  if(_drawingManager) { _drawingManager.setMap(null) }
+  // Cancel any in-progress draw, but preserve a completed shape for other views
+  cancelCustomDraw()
   if(_drawnShape) {
     // Save geometry before detaching
     _shapeFilterGeo = _extractShapeGeo(_drawnShape)

@@ -10,10 +10,15 @@ function refreshUrlParams()
 	{
 		urlParams = urlParams[1].split('$')[0]
 		urlParams = parseQueryParams(urlParams)
-		jobId = urlParams.jobId
-		jobName = urlParams.jobName
-		localStorage.setItem('jobId', jobId)
-		localStorage.setItem('jobName', jobName)
+		// Only adopt jobId/jobName when this URL actually carries them — otherwise a
+		// param-only URL like #searches?platform=facebook would clobber them with
+		// the string "undefined" and break the map/grid "select a search" guard.
+		if (urlParams.jobId !== undefined) {
+			jobId = urlParams.jobId
+			jobName = urlParams.jobName
+			localStorage.setItem('jobId', jobId)
+			localStorage.setItem('jobName', jobName)
+		}
 		if (urlParams.platform) localStorage.setItem('platform', urlParams.platform)
 	}
 	else
@@ -105,6 +110,17 @@ function loadpage(mypage, mypush=false)
 		history.replaceState(null, null, location.href.substring(0, splitter)+'#'+mypage)
 	if(mypush)
 		renderpage()
+	return false
+}
+
+// Back button (shared toolbar) — return to the searches list filtered to the
+// current search's platform, rather than home. Prefers the platform in the
+// current URL (map/grid results view), then the last-viewed platform, then
+// falls back to the unfiltered searches list.
+function backToSearches()
+{
+	let plat = (typeof urlParams === 'object' && urlParams && urlParams.platform) || localStorage.getItem('platform') || ''
+	loadpage(plat ? ('searches?platform=' + encodeURIComponent(plat)) : 'searches', true)
 	return false
 }
 

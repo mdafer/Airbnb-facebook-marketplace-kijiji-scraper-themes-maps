@@ -23,6 +23,9 @@ Helpers.pendingManualResponses = new Map() // requestId -> {resolve, reject}
 // Active CAPTCHA sessions — requestId -> { page }
 Helpers.captchaSessions = new Map()
 
+// Active live page-view streams — jobId -> stop()
+Helpers.scrapeStreams = new Map()
+
 io.on('connection', (socket) => {
 	socket.on('manualResponse', (data) => {
 		const pending = Helpers.pendingManualResponses.get(data.requestId)
@@ -43,6 +46,23 @@ io.on('connection', (socket) => {
 		if (session && session.page) {
 			try { await session.page.mouse.click(data.x, data.y) } catch(e) {}
 		}
+	})
+	socket.on('captchaKey', async (data) => {
+		const session = Helpers.captchaSessions.get(data.requestId)
+		if (session && session.page) {
+			try {
+				// Printable characters are inserted verbatim; named keys (Enter,
+				// Backspace, Tab, arrows…) are pressed so the sign-in form that
+				// Facebook shows after the CAPTCHA can be typed into remotely.
+				if (data.text) await session.page.keyboard.sendCharacter(data.text)
+				else if (data.key) await session.page.keyboard.press(data.key)
+			} catch(e) {}
+		}
+	})
+	// User closed the live page-view panel — stop streaming frames for that job.
+	socket.on('stopScrapeStream', (data) => {
+		const stop = Helpers.scrapeStreams.get(data && data.jobId)
+		if (stop) stop()
 	})
 })
 

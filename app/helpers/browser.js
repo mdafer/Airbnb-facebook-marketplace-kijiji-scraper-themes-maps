@@ -2,8 +2,16 @@ const puppeteer = require('puppeteer-extra')
 const StealthPlugin = require('puppeteer-extra-plugin-stealth')
 const https = require('https')
 const fs = require('fs')
+const path = require('path')
 
 puppeteer.use(StealthPlugin())
+
+// Persistent browser profile. Without this Chromium starts from a blank profile
+// every launch, so it never accumulates the cookies / localStorage / device
+// history a trusted browser has — which is why Facebook keeps treating it as a
+// fresh device. Point it at a stable dir (mount a volume in Docker to persist
+// across container recreation).
+const USER_DATA_DIR = process.env.PUPPETEER_USER_DATA_DIR || path.resolve(__dirname, '../../.browser-profile')
 
 // Resolve a hostname via Cloudflare DoH and pin it in /etc/hosts
 const _resolvedHosts = new Set()
@@ -74,11 +82,24 @@ async function resolvePageDeps(page) {
 
 let _browser = null
 
+// Chromium writes a SingletonLock (symlink encoding hostname+PID) into the
+// profile. With a persistent userDataDir, a container restart gets a new hostname,
+// so the leftover lock looks like "another computer" and the launch fails with
+// "profile appears to be in use". We only ever launch when no live browser is
+// connected, so any lock present here is stale — clear it before launching.
+function clearStaleProfileLocks() {
+	for (const f of ['SingletonLock', 'SingletonSocket', 'SingletonCookie']) {
+		try { fs.rmSync(path.join(USER_DATA_DIR, f), { force: true }) } catch(e) {}
+	}
+}
+
 async function getBrowser() {
 	if (!_browser || !_browser.isConnected()) {
+		clearStaleProfileLocks()
 		_browser = await puppeteer.launch({
 			executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',
 			headless: 'new',
+			userDataDir: USER_DATA_DIR,
 			args: [
 				'--no-sandbox',
 				'--disable-setuid-sandbox',

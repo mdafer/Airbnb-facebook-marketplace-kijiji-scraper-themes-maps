@@ -890,9 +890,111 @@ function showAlertModal(title, message) {
 	$('#sharedAlertModal').modal('show')
 }
 
+// --- Library-free drawing engine -------------------------------------------
+// Google removed google.maps.drawing (DrawingManager + OverlayType) in Maps JS
+// v3.65 (~May 2026). We reimplement the interactive drawing it provided using
+// native map click/mousemove events, producing the SAME core overlays
+// (google.maps.Rectangle/Circle/Polygon — still part of core Maps) that the
+// rest of the app already consumes. So _extractShapeGeo / getQuintoBbox / the
+// shape filter all keep working unchanged. See the project memory note
+// "google-maps-drawing-library-removed".
+//
+// Interaction (the map fires click/mousemove/dblclick but NOT mousedown/mouseup,
+// so drag-to-draw isn't possible — we use clicks instead):
+//   rectangle: click one corner, click the opposite corner
+//   circle:    click the center, click a point on the edge
+//   polygon:   click each vertex, double-click to finish
+var DRAW_MODE = { CIRCLE: 'circle', POLYGON: 'polygon', RECTANGLE: 'rectangle' }
+var _activeDraw = null
+
+function _drawBoundsLiteral(a, b) {
+	return {
+		north: Math.max(a.lat(), b.lat()), south: Math.min(a.lat(), b.lat()),
+		east: Math.max(a.lng(), b.lng()), west: Math.min(a.lng(), b.lng())
+	}
+}
+
+// Cancel any in-progress draw, discarding its (unfinished) preview overlay.
+function cancelCustomDraw() {
+	if(_activeDraw) { _activeDraw.cleanup(); _activeDraw = null }
+}
+
+// Begin drawing `mode` on `map`. On completion, calls onComplete(overlay) with a
+// finished, editable+draggable google.maps.{Rectangle|Circle|Polygon}.
+function startCustomDraw(map, mode, opts, onComplete) {
+	cancelCustomDraw()
+	if(!map || !window.google || !google.maps) return null
+	// clickable:false is essential while drawing: once the preview shape grows
+	// under the cursor, a clickable overlay would swallow the map's click/mousemove
+	// events (so the second click never reaches the map to finish, and the preview
+	// updates in choppy jumps). finish() restores clickability on the final shape.
+	var style = Object.assign({ fillColor: '#2196F3', fillOpacity: 0.15, strokeColor: '#2196F3', strokeWeight: 2, clickable: false }, opts || {})
+	var listeners = []
+	var preview = null, anchor = null, polyPath = null
+	var prevCursor = map.get('draggableCursor')
+	var prevDblZoom = map.get('disableDoubleClickZoom')
+	map.setOptions({ draggableCursor: 'crosshair', disableDoubleClickZoom: true })
+
+	function on(target, ev, fn) { listeners.push(google.maps.event.addListener(target, ev, fn)) }
+	function cleanup() {
+		listeners.forEach(function(l){ google.maps.event.removeListener(l) })
+		listeners = []
+		if(preview) { preview.setMap(null); preview = null }
+		map.setOptions({ draggableCursor: prevCursor || null, disableDoubleClickZoom: !!prevDblZoom })
+	}
+	function finish(shape) {
+		preview = null            // keep the final shape — cleanup() must not remove it
+		cleanup()
+		_activeDraw = null
+		shape.setOptions({ editable: true, draggable: true, clickable: true })
+		shape.setMap(map)
+		if(typeof onComplete === 'function') onComplete(shape)
+	}
+
+	if(mode === DRAW_MODE.RECTANGLE) {
+		on(map, 'click', function(e){
+			if(!anchor) {
+				anchor = e.latLng
+				preview = new google.maps.Rectangle(Object.assign({}, style, { map: map, bounds: _drawBoundsLiteral(anchor, anchor) }))
+			} else {
+				preview.setBounds(_drawBoundsLiteral(anchor, e.latLng))
+				finish(preview)
+			}
+		})
+		on(map, 'mousemove', function(e){ if(anchor && preview) preview.setBounds(_drawBoundsLiteral(anchor, e.latLng)) })
+	} else if(mode === DRAW_MODE.CIRCLE) {
+		on(map, 'click', function(e){
+			if(!anchor) {
+				anchor = e.latLng
+				preview = new google.maps.Circle(Object.assign({}, style, { map: map, center: anchor, radius: 1 }))
+			} else {
+				preview.setRadius(google.maps.geometry.spherical.computeDistanceBetween(anchor, e.latLng))
+				finish(preview)
+			}
+		})
+		on(map, 'mousemove', function(e){
+			if(anchor && preview) preview.setRadius(Math.max(1, google.maps.geometry.spherical.computeDistanceBetween(anchor, e.latLng)))
+		})
+	} else { // POLYGON
+		polyPath = new google.maps.MVCArray()
+		preview = new google.maps.Polygon(Object.assign({}, style, { map: map, paths: polyPath }))
+		// Commit each click as a vertex immediately. A finishing double-click fires
+		// two click events at the same spot (so two near-identical trailing
+		// vertices) followed by dblclick — we drop one duplicate and close.
+		on(map, 'click', function(e){ polyPath.push(e.latLng) })
+		on(map, 'dblclick', function(){
+			var n = polyPath.getLength()
+			if(n >= 2) polyPath.removeAt(n - 1)
+			if(polyPath.getLength() >= 3) finish(preview)
+		})
+	}
+	_activeDraw = { cleanup: cleanup }
+	return { cancel: cancelCustomDraw }
+}
+
 /**
  * Show the draw-shape selection modal.
- * @param {function} onSelect  called with the chosen google.maps.drawing.OverlayType
+ * @param {function} onSelect  called with the chosen DRAW_MODE value
  */
 function showDrawShapeModal(onSelect) {
 	// If another modal is already open, stack on top of it (Bootstrap doesn't
@@ -913,14 +1015,14 @@ function showDrawShapeModal(onSelect) {
 	$('#drawShapeModal').modal('show')
 	$('#drawShapeCircleBtn').off('click').on('click', function() {
 		$('#drawShapeModal').modal('hide')
-		if(typeof onSelect === 'function') onSelect(google.maps.drawing.OverlayType.CIRCLE)
+		if(typeof onSelect === 'function') onSelect(DRAW_MODE.CIRCLE)
 	})
 	$('#drawShapePolygonBtn').off('click').on('click', function() {
 		$('#drawShapeModal').modal('hide')
-		if(typeof onSelect === 'function') onSelect(google.maps.drawing.OverlayType.POLYGON)
+		if(typeof onSelect === 'function') onSelect(DRAW_MODE.POLYGON)
 	})
 	$('#drawShapeRectangleBtn').off('click').on('click', function() {
 		$('#drawShapeModal').modal('hide')
-		if(typeof onSelect === 'function') onSelect(google.maps.drawing.OverlayType.RECTANGLE)
+		if(typeof onSelect === 'function') onSelect(DRAW_MODE.RECTANGLE)
 	})
 }

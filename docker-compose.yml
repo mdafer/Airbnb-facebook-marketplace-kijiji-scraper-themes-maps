@@ -20,6 +20,10 @@ services:
     volumes:
       - ./app:/usr/src/app
       - /usr/src/app/node_modules
+      # Persistent Chromium profile (cookies, localStorage, device trust) so the
+      # browser isn't a brand-new device every container start. Path matches
+      # PUPPETEER_USER_DATA_DIR in .env.
+      - browser-profile:/data/browser-profile
 
   mongo:
     image: mongo:8
@@ -52,3 +56,4 @@ networks:
 
 volumes:
   db-data:
+  browser-profile:

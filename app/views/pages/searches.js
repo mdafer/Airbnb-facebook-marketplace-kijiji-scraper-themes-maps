@@ -104,7 +104,7 @@ var searchespage= `<!-- Content Header (Page header) -->
 
             <div id="newSearchQuintoExtras" style="display:none">
               <div class="form-group">
-                <label>Search Area <small class="text-muted">— draw a circle, polygon, or rectangle. QA's URL doesn't encode map position, so we must capture it here. The shape's bounding box is sent to QA.</small></label>
+                <label>Search Area <small class="text-muted" id="newSearchBboxHint">— draw a circle, polygon, or rectangle. QA's URL doesn't encode map position, so we must capture it here. The shape's bounding box is sent to QA.</small></label>
                 <div style="margin-bottom:6px">
                   <button type="button" class="btn btn-sm btn-default" id="newSearchBboxDrawBtn"><i class="fa fa-pencil"></i> Draw shape</button>
                   <button type="button" class="btn btn-sm btn-default" id="newSearchBboxUseViewBtn"><i class="fa fa-crop"></i> Use current map view</button>
@@ -193,7 +193,7 @@ var searchespage= `<!-- Content Header (Page header) -->
             </div>
             <div id="editSearchQuintoExtras" style="display:none">
               <div class="form-group">
-                <label>Search Area <small class="text-muted">— draw a circle, polygon, or rectangle.</small></label>
+                <label>Search Area <small class="text-muted" id="editSearchBboxHint">— draw a circle, polygon, or rectangle.</small></label>
                 <div style="margin-bottom:6px">
                   <button type="button" class="btn btn-sm btn-default" id="editSearchBboxDrawBtn"><i class="fa fa-pencil"></i> Draw shape</button>
                   <button type="button" class="btn btn-sm btn-default" id="editSearchBboxUseViewBtn"><i class="fa fa-crop"></i> Use current map view</button>
@@ -269,14 +269,17 @@ function searchesfunc()
       $('#newSearchAirbnbExtras').show()
       if(window._airbnbAutoConfirmEmpty) $('#newSearchAutoConfirmEmpty').prop('checked', true)
     } else if(plat === 'facebook') {
-      $('#newSearchUrlInput').attr('placeholder', 'https://www.facebook.com/marketplace/toronto/propertyrentals?...')
+      $('#newSearchUrlInput').attr('placeholder', 'https://www.facebook.com/marketplace/category/propertyrentals?...')
       $('#newSearchUrlLabel').text('Facebook Marketplace Search Link')
       $('#newSearchAirbnbExtras').hide()
-      $('#newSearchQuintoExtras').hide()
+      $('#newSearchBboxHint').text("— click “Draw shape”, then click two opposite corners on the map. Facebook's URL doesn't encode map position, so we send this area as latitude/longitude/radius.")
+      $('#newSearchQuintoExtras').show()
+      initQuintoBboxPicker('new')
     } else if(plat === 'quintoandar') {
       $('#newSearchUrlInput').attr('placeholder', 'https://www.quintoandar.com.br/comprar/imovel/sao-paulo-sp-brasil/...')
       $('#newSearchUrlLabel').text('Quinto Andar Sales Search Link')
       $('#newSearchAirbnbExtras').hide()
+      $('#newSearchBboxHint').text("— click “Draw shape”, then click two opposite corners on the map. QA's URL doesn't encode map position, so we capture this area and send its bounding box to QA.")
       $('#newSearchQuintoExtras').show()
       initQuintoBboxPicker('new')
     } else {
@@ -345,6 +348,22 @@ function searchesfunc()
       )
     })
 
+    $(document).on('click.searchesActions', '#searchesTBody .clearCacheBtn', function(event){
+      event.preventDefault();
+      var ccId = $(this).data('id')
+      var ccName = $(this).data('name') || 'this search'
+      showConfirmModal(
+        'Clear cached listings',
+        'Remove all cached listings for "' + ccName + '" from the database so the next run re-scrapes everything from scratch. This cannot be undone. Continue?',
+        function() {
+          APIclearJobListings(JSON.stringify({jobId: ccId}), function(result){
+            showAlertModal('Cache cleared', 'Cleared <strong>' + ((result && result.removed) || 0) + '</strong> cached listings. Run the search again to re-scrape from scratch.')
+          })
+        },
+        { confirmLabel: 'Clear cache', confirmClass: 'btn-warning' }
+      )
+    })
+
     $(document).on('click.searchesActions', '#searchesTBody .delSearchBtn', function(event){
       event.preventDefault();
       var delId = $(this).data('id')
@@ -383,9 +402,17 @@ function searchesfunc()
       } else if(jobPlatform === 'quintoandar') {
         $('#editSearchAirbnbExtras').hide()
         $('#editSearchUrlParams').empty()
+        $('#editSearchBboxHint').text('— click “Draw shape”, then click two opposite corners on the map.')
         $('#editSearchQuintoExtras').show()
         var existingBbox = extractBboxFromUrl($(this).data('url'))
         initQuintoBboxPicker('edit', existingBbox)
+      } else if(jobPlatform === 'facebook') {
+        $('#editSearchAirbnbExtras').hide()
+        $('#editSearchUrlParams').empty()
+        $('#editSearchBboxHint').text("— click “Draw shape”, then click two opposite corners. Sent to Facebook as latitude/longitude/radius.")
+        $('#editSearchQuintoExtras').show()
+        var existingFbBbox = extractFbBboxFromUrl($(this).data('url'))
+        initQuintoBboxPicker('edit', existingFbBbox)
       } else {
         $('#editSearchAirbnbExtras').hide()
         $('#editSearchQuintoExtras').hide()
@@ -509,6 +536,15 @@ function searchesfunc()
       }
       formData.url = applyBboxToUrl(formData.url, bbox)
       delete formData.gridDepth
+    } else if(formData.platform === 'facebook') {
+      var fbBbox = getQuintoBbox('new')
+      if(!fbBbox) {
+        showAlertModal('Search area required',
+          'Facebook Marketplace URLs do not encode map position, so they fall back to your account default location. Draw a shape on the map (circle, polygon, or rectangle) or click "Use current map view" so we can send latitude/longitude/radius to Facebook.')
+        return
+      }
+      formData.url = applyFbLocationToUrl(formData.url, fbBbox)
+      delete formData.gridDepth
     } else {
       delete formData.gridDepth
     }
@@ -549,6 +585,15 @@ function searchesfunc()
         return
       }
       formData.url = applyBboxToUrl(formData.url, bbox)
+    }
+    if(platform === 'facebook') {
+      var fbBbox = getQuintoBbox('edit')
+      if(!fbBbox) {
+        showAlertModal('Search area required',
+          'Facebook Marketplace URLs do not encode map position. Draw a shape on the map or click "Use current map view".')
+        return
+      }
+      formData.url = applyFbLocationToUrl(formData.url, fbBbox)
     }
     if(!('groupId' in formData)) formData.groupId = ''
     APIupdateJob(formData, ()=>{
@@ -742,12 +787,12 @@ function _doInitQuintoBboxPicker(key, initialBbox) {
   var prev = _quintoPickers[key]
   if(prev) {
     if(prev.shape) try { prev.shape.setMap(null) } catch(e) {}
-    if(prev.mgr) try { prev.mgr.setMap(null) } catch(e) {}
     if(prev.map) try { google.maps.event.clearInstanceListeners(prev.map) } catch(e) {}
   }
+  cancelCustomDraw()
   // Wipe the container so the old map's DOM doesn't linger
   el.innerHTML = ''
-  var p = _quintoPickers[key] = { map: null, shape: null, mgr: null, key: key }
+  var p = _quintoPickers[key] = { map: null, shape: null, key: key }
   p.map = new google.maps.Map(el, {
     center: { lat: -23.5505, lng: -46.6333 },
     zoom: 11,
@@ -755,19 +800,9 @@ function _doInitQuintoBboxPicker(key, initialBbox) {
     streetViewControl: false,
     fullscreenControl: false
   })
-  var shapeOpts = { fillColor: '#2196F3', fillOpacity: 0.15, strokeColor: '#2196F3', strokeWeight: 2, editable: true, draggable: true }
-  p.mgr = new google.maps.drawing.DrawingManager({
-    drawingControl: false,
-    rectangleOptions: shapeOpts
-  })
-  p.mgr.setMap(p.map)
-  google.maps.event.addListener(p.mgr, 'overlaycomplete', function(e) {
-    if(p.shape) p.shape.setMap(null)
-    p.shape = e.overlay
-    p.mgr.setDrawingMode(null)
-    _bindQuintoShapeListeners(p)
-    _updateQuintoBboxStatus(p)
-  })
+  // Drawing is started on demand by _quintoStartDrawing via startCustomDraw
+  // (the old google.maps.drawing DrawingManager was removed by Google in Maps
+  // JS v3.65). The picker object just holds the map and the current shape.
   // Pre-populate from initial bbox (e.g. when editing an existing search).
   // Run on next paint so fitBounds has the final container size.
   if(initialBbox) {
@@ -812,18 +847,36 @@ function _bindQuintoShapeListeners(p) {
 
 function _quintoStartDrawing(key) {
   var p = _quintoPickers[key]
-  if(!p || !p.mgr) { showAlertModal('Map not ready', 'Wait a moment for the map to load.'); return }
-  // Only rectangle is supported: QA's API takes a bbox, and the URL hash only
-  // encodes a bbox. A circle/polygon would round-trip lossily to a rectangle
-  // anyway on edit, which is confusing — so we skip the shape chooser and go
-  // straight to rectangle drawing.
-  if(p.shape) { p.shape.setMap(null); p.shape = null; _updateQuintoBboxStatus(p) }
-  p.mgr.setDrawingMode(google.maps.drawing.OverlayType.RECTANGLE)
+  // Self-heal: if the map never initialized (timing/visibility edge cases when
+  // the picker is shown without a re-render), build it now — the modal is
+  // definitely visible at click time, so the container has layout.
+  if(!p || !p.map) {
+    _doInitQuintoBboxPicker(key)
+    p = _quintoPickers[key]
+  }
+  if(!p || !p.map) { showAlertModal('Map not ready', 'Wait a moment for the map to load.'); return }
+  // The canvas may have been built while the container was hidden/animating,
+  // leaving it zero-sized so clicks don't register — nudge it back to size.
+  google.maps.event.trigger(p.map, 'resize')
+  // Only rectangle is supported: the bbox the URL/API takes is a rectangle, so we
+  // skip the shape chooser and draw a rectangle directly (click two corners).
+  if(p.shape) { p.shape.setMap(null); p.shape = null }
+  $('#' + _qpCfg(key).statusId).text('Click two opposite corners on the map to set the area.')
+  startCustomDraw(p.map, DRAW_MODE.RECTANGLE, { fillColor: '#2196F3', fillOpacity: 0.15, strokeColor: '#2196F3', strokeWeight: 2 }, function(overlay) {
+    p.shape = overlay
+    _bindQuintoShapeListeners(p)
+    _updateQuintoBboxStatus(p)
+  })
 }
 
 function _quintoUseCurrentView(key) {
   var p = _quintoPickers[key]
+  if(!p || !p.map) {
+    _doInitQuintoBboxPicker(key)
+    p = _quintoPickers[key]
+  }
   if(!p || !p.map) return
+  google.maps.event.trigger(p.map, 'resize')
   var b = p.map.getBounds()
   if(!b) return
   if(p.shape) p.shape.setMap(null)
@@ -904,6 +957,60 @@ function applyBboxToUrl(url, bbox) {
     u.hash = hash ? hash + '&' + bboxStr : '#' + bboxStr
     return u.toString()
   } catch(e) { return url }
+}
+
+// Facebook Marketplace category URLs (e.g. /marketplace/category/propertyrentals)
+// carry no location, so FB falls back to the account's default city. FB does honor
+// latitude/longitude/radius query params, so we inject them from the drawn shape.
+// Allowed radius buckets (km) match Facebook's own distance picker.
+var _FB_RADIUS_BUCKETS_KM = [1, 2, 5, 10, 20, 40, 60, 80, 100, 250, 500]
+
+function _haversineKm(lat1, lng1, lat2, lng2) {
+  var R = 6371
+  var dLat = (lat2 - lat1) * Math.PI / 180
+  var dLng = (lng2 - lng1) * Math.PI / 180
+  var a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+          Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+          Math.sin(dLng / 2) * Math.sin(dLng / 2)
+  return 2 * R * Math.asin(Math.sqrt(a))
+}
+
+// Radius covering the bbox = center-to-corner distance, snapped up to a FB bucket.
+function _fbRadiusKmFromBbox(bbox) {
+  var latC = (bbox.north + bbox.south) / 2
+  var lngC = (bbox.east + bbox.west) / 2
+  var halfDiag = _haversineKm(latC, lngC, bbox.north, bbox.east)
+  for(var i = 0; i < _FB_RADIUS_BUCKETS_KM.length; i++)
+    if(_FB_RADIUS_BUCKETS_KM[i] >= halfDiag) return _FB_RADIUS_BUCKETS_KM[i]
+  return _FB_RADIUS_BUCKETS_KM[_FB_RADIUS_BUCKETS_KM.length - 1]
+}
+
+function applyFbLocationToUrl(url, bbox) {
+  try {
+    var u = new URL(url)
+    var latC = (bbox.north + bbox.south) / 2
+    var lngC = (bbox.east + bbox.west) / 2
+    u.searchParams.set('latitude', latC.toFixed(6))
+    u.searchParams.set('longitude', lngC.toFixed(6))
+    u.searchParams.set('radius', String(_fbRadiusKmFromBbox(bbox)))
+    return u.toString()
+  } catch(e) { return url }
+}
+
+// Rebuild an approximate bbox from a FB URL's latitude/longitude/radius so the
+// edit modal can pre-populate the shape. Returns null if no coords present.
+function extractFbBboxFromUrl(url) {
+  try {
+    var u = new URL(url)
+    var lat = parseFloat(u.searchParams.get('latitude'))
+    var lng = parseFloat(u.searchParams.get('longitude'))
+    var radius = parseFloat(u.searchParams.get('radius'))
+    if(!isFinite(lat) || !isFinite(lng)) return null
+    if(!isFinite(radius) || radius <= 0) radius = 10
+    var dLat = radius / 111.0
+    var dLng = radius / ((111.0 * Math.cos(lat * Math.PI / 180)) || 1)
+    return { north: lat + dLat, south: lat - dLat, east: lng + dLng, west: lng - dLng }
+  } catch(e) { return null }
 }
 
 function parseQuintoAndarUrl(url) {
@@ -1462,7 +1569,7 @@ function _appendJobRows($tbody, jobs, groupId) {
       statusDom = '<td><span class="label label-primary">Queued</span></td>'
     } else {
       switch(job.statusCode) {
-        case 0: statusDom = '<td><span class="label label-danger">Failed</span></td>'; break
+        case 0: statusDom = '<td><span class="label label-default">Stopped</span></td>'; break
         case 1: statusDom = '<td><span class="label label-success">Completed</span></td>'; break
         case 2: statusDom = '<td><span class="label label-warning">Pending</span></td>'; break
         default: statusDom = '<td></td>'
@@ -1501,6 +1608,7 @@ function _appendJobRows($tbody, jobs, groupId) {
         <td><button type="button" class="btn btn-primary editSearchBtn BStooltip" rel="tooltip" data-placement="top" title="edit" data-toggle="modal" data-target="#editSearchModal"><i class="fa fa-edit"></i></button>
         ${stopBtnHtml}
         <button type="button" class="btn btn-info refetchPhotosBtn BStooltip" rel="tooltip" data-placement="top" title="Re-scrape listings with no photos"><i class="fa fa-camera"></i></button>
+        <button type="button" class="btn btn-default clearCacheBtn BStooltip" rel="tooltip" data-placement="top" title="Clear cache (re-scrape from scratch)"><i class="fa fa-eraser"></i></button>
         <button type="button" class="btn btn-danger delSearchBtn BStooltip" rel="tooltip" data-placement="top" title="delete"><i class="fa fa-trash"></i></button>
         </td>
         ${platformLabel}
@@ -1513,6 +1621,7 @@ function _appendJobRows($tbody, jobs, groupId) {
     `)
     $('#searchesTBody .editSearchBtn').last().data('id', job.id).data('name', $.parseHTML(job.name || ' ')[0].data).data('url', job.url).data('description', $.parseHTML(job.description || ' ')[0].data).data('platform', platform).data('gridDepth', job.gridDepth || 1).data('groupId', job.groupId || '')
     $('#searchesTBody .refetchPhotosBtn').last().data('id', job.id).data('name', job.name)
+    $('#searchesTBody .clearCacheBtn').last().data('id', job.id).data('name', job.name)
     $('#searchesTBody .delSearchBtn').last().data('id', job.id)
     if(stopBtnHtml)
       $('#searchesTBody .stopSearchBtn').last().data('id', job.id).data('name', job.name)

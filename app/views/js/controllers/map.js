@@ -253,8 +253,11 @@ function resetJob()
 
 function mapClearInformationWindow()
 {
+  // Explicit user clear (trash button): wipe the persistent buffer too.
+  if (window._infoMessages) window._infoMessages.length = 0
   $('#informationStatus').text('')
   $('#informationStatus2').text('')
+  if (typeof renderInfoMessages === 'function') { renderInfoMessages(); return }
   $("#messages").html(
     `<div class="row" style="max-width:100%">
       <div class="col-xs-3 text-center" style="padding:0">

@@ -338,16 +338,19 @@ function getHideAmenities(){
 }
 
 // --- Drawing tools for geographic filtering ---
-var _drawingManager = null
 var _drawnShape = null
 var _shapeFilterGeo = null
 var _markersHiddenByShape = []
 
 function _extractShapeGeo(shape) {
   if(!shape) return null
-  if(shape.getBounds) {
+  // Circle has getRadius; Rectangle has getBounds but no getRadius; Polygon has getPath.
+  if(shape.getRadius) {
     var c = shape.getCenter()
     return { type: 'circle', lat: c.lat(), lng: c.lng(), radius: shape.getRadius() }
+  } else if(shape.getBounds) {
+    var b = shape.getBounds(), ne = b.getNorthEast(), sw = b.getSouthWest()
+    return { type: 'rectangle', north: ne.lat(), south: sw.lat(), east: ne.lng(), west: sw.lng() }
   } else {
     var paths = []
     shape.getPath().forEach(function(p){ paths.push({ lat: p.lat(), lng: p.lng() }) })
@@ -367,6 +370,8 @@ function isInsideShapeFilter(lat, lon) {
     var center = new google.maps.LatLng(geo.lat, geo.lng)
     var pos = new google.maps.LatLng(lat, lon)
     return google.maps.geometry.spherical.computeDistanceBetween(pos, center) <= geo.radius
+  } else if(geo.type === 'rectangle') {
+    return lat <= geo.north && lat >= geo.south && lon <= geo.east && lon >= geo.west
   } else {
     var poly = new google.maps.Polygon({ paths: geo.paths })
     var pos = new google.maps.LatLng(lat, lon)
@@ -381,9 +386,11 @@ function _debouncedApplyShapeFilter() {
 }
 
 function _bindShapeEditListeners(shape) {
-  if(shape.getBounds) {
+  if(shape.getRadius) {
     google.maps.event.addListener(shape, 'radius_changed', _debouncedApplyShapeFilter)
     google.maps.event.addListener(shape, 'center_changed', _debouncedApplyShapeFilter)
+  } else if(shape.getBounds) {
+    google.maps.event.addListener(shape, 'bounds_changed', _debouncedApplyShapeFilter)
   } else {
     google.maps.event.addListener(shape.getPath(), 'set_at', _debouncedApplyShapeFilter)
     google.maps.event.addListener(shape.getPath(), 'insert_at', _debouncedApplyShapeFilter)
@@ -393,25 +400,21 @@ function _bindShapeEditListeners(shape) {
 function startDrawing(){
   if(!map) { showAlertModal('Map Not Open', 'Open the map view first to draw an area.'); return }
   if(_drawnShape) clearDrawnShape()
-  if(!_drawingManager) {
-    _drawingManager = new google.maps.drawing.DrawingManager({
-      drawingControl: false,
-      circleOptions: { fillColor: '#2196F3', fillOpacity: 0.15, strokeColor: '#2196F3', strokeWeight: 2, editable: true },
-      polygonOptions: { fillColor: '#2196F3', fillOpacity: 0.15, strokeColor: '#2196F3', strokeWeight: 2, editable: true }
-    })
-    google.maps.event.addListener(_drawingManager, 'overlaycomplete', function(e){
-      _drawnShape = e.overlay
+  showDrawShapeModal(function(mode) {
+    // Tell the user how the (now click-based) drawing works, since there's no
+    // longer a drag-to-draw DrawingManager.
+    var hint = mode === DRAW_MODE.POLYGON
+      ? 'Click each corner on the map, then double-click to finish the area.'
+      : 'Click two opposite points on the map to set the area.'
+    $('.resultscount').html(hint)
+    startCustomDraw(map, mode, { editable: true }, function(overlay){
+      _drawnShape = overlay
       _shapeFilterGeo = _extractShapeGeo(_drawnShape)
-      _drawingManager.setDrawingMode(null)
       applyShapeFilter()
       _bindShapeEditListeners(_drawnShape)
       $('#drawAreaBtn').addClass('btn-primary').removeClass('btn-default')
       $('#clearShapeBtn').show()
     })
-  }
-  _drawingManager.setMap(map)
-  showDrawShapeModal(function(mode) {
-    _drawingManager.setDrawingMode(mode)
   })
 }
 
@@ -426,6 +429,8 @@ function restoreShapeOnMap() {
     var opts = { fillColor: '#2196F3', fillOpacity: 0.15, strokeColor: '#2196F3', strokeWeight: 2, editable: true, map: map }
     if(_shapeFilterGeo.type === 'circle') {
       _drawnShape = new google.maps.Circle(Object.assign(opts, { center: { lat: _shapeFilterGeo.lat, lng: _shapeFilterGeo.lng }, radius: _shapeFilterGeo.radius }))
+    } else if(_shapeFilterGeo.type === 'rectangle') {
+      _drawnShape = new google.maps.Rectangle(Object.assign(opts, { bounds: { north: _shapeFilterGeo.north, south: _shapeFilterGeo.south, east: _shapeFilterGeo.east, west: _shapeFilterGeo.west } }))
     } else {
       _drawnShape = new google.maps.Polygon(Object.assign(opts, { paths: _shapeFilterGeo.paths }))
     }
@@ -445,10 +450,10 @@ function applyShapeFilter(){
   _markers.forEach(function(marker){
     var pos = marker.getPosition()
     var inside = false
-    if(_drawnShape.getBounds) {
-      var center = _drawnShape.getCenter()
-      var radius = _drawnShape.getRadius()
-      inside = google.maps.geometry.spherical.computeDistanceBetween(pos, center) <= radius
+    if(_drawnShape.getRadius) {
+      inside = google.maps.geometry.spherical.computeDistanceBetween(pos, _drawnShape.getCenter()) <= _drawnShape.getRadius()
+    } else if(_drawnShape.getBounds) {
+      inside = _drawnShape.getBounds().contains(pos)
     } else {
       inside = google.maps.geometry.poly.containsLocation(pos, _drawnShape)
     }
@@ -468,7 +473,7 @@ function clearDrawnShape(silent){
   }
   _shapeFilterGeo = null
   saveShapeGeo()
-  if(_drawingManager) _drawingManager.setDrawingMode(null)
+  cancelCustomDraw()
   _markersHiddenByShape.forEach(function(m){ if(map) m.setMap(map) })
   _markersHiddenByShape = []
   $('#drawAreaBtn').removeClass('btn-primary').addClass('btn-default')

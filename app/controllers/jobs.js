@@ -129,6 +129,7 @@ module.exports = {
 			if(result.n <1)
 				return callback({ status: Helpers.ApiStatus.NOT_FOUND, meta: {message:"Job '"+params.id+"' not found"}})
 			params.db.get('ads').remove({jobs:{}},{multi:true})
+			params.db.get('listingCache').remove({jobId: String(params.id)}).catch(() => {})
 			return callback({status:Helpers.ApiStatus.SUCCESS, meta:{status:'Deleted', jobId: params.id}})
 		}
 		catch(err) {
@@ -255,7 +256,19 @@ module.exports = {
 			let user = await params.db.get('users').findOne({"jobs.id":params.jobId})
 			if(!user)
 				return callback({ status: ApiStatus.NOT_FOUND, meta: {message:"Job '"+params.jobId+"' not found"}})
-			let result = await params.db.get('ads').remove({["jobs."+params.jobId]:{ $exists: true}}, {multi:true})
+			// Delete this job's cached ads so the next run scrapes from scratch — but
+			// keep favorited ads (deleting them would orphan the favorite, since a
+			// re-scrape recreates the ad with a new _id). Favorited listings stay
+			// cached; everything else is re-fetched fresh.
+			const favoritedIds = await Helpers.common.getFavoritedAdIds(params.db)
+			let result = await params.db.get('ads').remove({
+				$and: [
+					{["jobs."+params.jobId]:{ $exists: true}},
+					{ _id: { $nin: favoritedIds } }
+				]
+			}, {multi:true})
+			// Drop any saved scroll/listing cache so the next run starts fresh.
+			await params.db.get('listingCache').remove({jobId: String(params.jobId)}).catch(() => {})
 			return callback({status:ApiStatus.SUCCESS, meta:{status:'Cleared', jobId: params.jobId, removed: result.result.n}})
 		}
 		catch(err) {

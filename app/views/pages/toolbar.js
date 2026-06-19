@@ -1,6 +1,6 @@
 var toolbarHtml = `
     <section class="content-header">
-      <button class="btn btn-light" type="button" onclick="loadpage('main', true);">
+      <button class="btn btn-light" type="button" onclick="backToSearches();">
         <span class="fa fa-chevron-left" aria-hidden="true"></span>
       </button><h1 id="pageTitle" style="display: inline;vertical-align: middle;">
         <small></small>
@@ -254,6 +254,8 @@ function _isMessagesAtBottom() {
 }
 
 $('#informationModal').on('shown.bs.modal', function() {
+  // Restore the full log — navigation may have wiped #messages since last open.
+  renderInfoMessages()
   $('#messages').off('scroll.autoScroll').on('scroll.autoScroll', function() {
     var el = this
     var isScrollable = el.scrollHeight > el.clientHeight
@@ -266,13 +268,41 @@ $('#informationModal').on('shown.bs.modal', function() {
   })
 })
 
-function addInfoRow(row)
-{
-  console.log('[socket] addInfoRow', row.print, 'messagesEl=', $('#messages').length)
-  $('#messages').append('<div class="row">' +
+// Persistent info-log buffer. renderpage() re-injects the toolbar template on
+// navigation, which wipes #messages; anchoring the buffer on window lets the log
+// survive so we can repopulate the panel whenever it's reopened.
+var _infoMessages = (window._infoMessages = window._infoMessages || [])
+var _INFO_MESSAGES_MAX = 1000
+
+var _INFO_HEADER_HTML = '<div class="row" style="max-width:100%">' +
+  '<div class="col-xs-3 text-center" style="padding:0">Time</div>' +
+  '<div class="col-xs-9 text-center">Message</div>' +
+'</div>'
+
+function _infoRowHtml(row) {
+  return '<div class="row">' +
     '<div class="col-xs-3 text-center wrap" style="padding:0">' + row.date + '</div>' +
     '<div class="col-xs-9 wrap">' + row.print + '</div>' +
-  '</div>');
+  '</div>'
+}
+
+// Rebuild #messages (header + every buffered row) from the persistent buffer.
+// The buffer is the source of truth, so a full replace can't duplicate rows.
+// Used on page load and modal-open so the log survives navigation.
+function renderInfoMessages() {
+  var el = $('#messages')
+  if (!el.length) return
+  var html = _INFO_HEADER_HTML
+  for (var i = 0; i < _infoMessages.length; i++) html += _infoRowHtml(_infoMessages[i])
+  el.html(html)
+  if ($('#autoScroll').is(':checked')) el.scrollTop(el[0].scrollHeight)
+}
+
+function addInfoRow(row)
+{
+  _infoMessages.push({ date: row.date, print: row.print })
+  if (_infoMessages.length > _INFO_MESSAGES_MAX) _infoMessages.splice(0, _infoMessages.length - _INFO_MESSAGES_MAX)
+  $('#messages').append(_infoRowHtml(row));
   if($('#autoScroll').is(':checked') && $('#informationModal').hasClass('in'))
       $("#messages").scrollTop($("#messages")[0].scrollHeight);
 }

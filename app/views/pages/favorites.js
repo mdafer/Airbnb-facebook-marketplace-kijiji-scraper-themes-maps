@@ -188,7 +188,7 @@ function favoritesUnload() {
   $('#filtersModal').off('show.bs.modal')
   $('.content-wrapper').off('scroll.gridInfinite')
   // Detach map so it can be reused
-  if(_drawingManager) _drawingManager.setMap(null)
+  cancelCustomDraw()
   if(_drawnShape) {
     _shapeFilterGeo = _extractShapeGeo(_drawnShape)
     _drawnShape.setMap(null)

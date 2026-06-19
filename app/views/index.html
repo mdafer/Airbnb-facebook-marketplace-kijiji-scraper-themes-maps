@@ -26,7 +26,14 @@
       window.googleMapsReady = new Promise(function(resolve) {
         window.__googleMapsCallback = resolve;
         var s = document.createElement('script');
-        s.src = 'https://maps.googleapis.com/maps/api/js?key=' + APP_CONFIG.GOOGLE_MAPS_KEY + '&libraries=places,drawing,geometry&v=weekly&callback=__googleMapsCallback';
+        // NOTE: Google deprecated the Drawing Library (Aug 2025) and removed it in
+        // Maps JS v3.65 (~May 2026), which is why all map drawing broke. We no
+        // longer depend on it — drawing is reimplemented in common.js
+        // (startCustomDraw) using core map events + Rectangle/Circle/Polygon — so
+        // the `drawing` library param below is unused and could be dropped. We keep
+        // `places` and `geometry` (both still used). See the project memory note
+        // "google-maps-drawing-library-removed".
+        s.src = 'https://maps.googleapis.com/maps/api/js?key=' + APP_CONFIG.GOOGLE_MAPS_KEY + '&libraries=places,geometry&v=weekly&callback=__googleMapsCallback';
         s.async = true;
         document.head.appendChild(s);
       });
@@ -531,47 +538,71 @@
     $('#fb2FARow').replaceWith('<div class="row"><div class="col-xs-12" style="color:#856404"><strong>Login skipped — continuing without authentication</strong></div></div>')
   }
 
-  // Facebook CAPTCHA flow — interactive remote screen
+  // Facebook CAPTCHA flow — interactive remote screen rendered as a fixed
+  // overlay on <body>. It must NOT depend on #messages / #informationModal: those
+  // live in the toolbar template that renderpage() tears down on navigation, so a
+  // CAPTCHA firing before you've opened the info panel would otherwise never show.
+  var CAPTCHA_SPECIAL_KEYS = { Enter:'Enter', Backspace:'Backspace', Tab:'Tab', Delete:'Delete', Escape:'Escape', ArrowLeft:'ArrowLeft', ArrowRight:'ArrowRight', ArrowUp:'ArrowUp', ArrowDown:'ArrowDown', Home:'Home', End:'End' }
+
+  function buildCaptchaOverlay() {
+    if (document.getElementById('captchaOverlay')) return
+    var overlay = document.createElement('div')
+    overlay.id = 'captchaOverlay'
+    overlay.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;z-index:100000;' +
+      'background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center'
+    overlay.innerHTML =
+      '<div style="background:#fff;border-radius:6px;max-width:1000px;width:92%;max-height:92vh;overflow:auto;padding:16px;box-shadow:0 8px 40px rgba(0,0,0,0.4)">' +
+        '<div style="margin-bottom:8px;color:#856404"><strong><i class="fa fa-shield"></i> Facebook Security Check</strong></div>' +
+        '<div style="margin-bottom:8px;color:#555;font-size:13px">Click the image to solve the CAPTCHA. If a sign-in form appears, click a field then type — your clicks and keystrokes are sent to Facebook. Click <strong>Done</strong> only once you are logged in.</div>' +
+        '<div style="text-align:center;position:relative;cursor:crosshair">' +
+          '<img id="captchaImg" src="" tabindex="0" style="max-width:100%;border:1px solid #ccc;border-radius:4px;outline:none">' +
+        '</div>' +
+        '<div style="margin-top:10px;text-align:right">' +
+          '<button class="btn btn-success btn-sm" onclick="captchaDone()">Done</button> ' +
+          '<button class="btn btn-default btn-sm" onclick="captchaSkip()">Skip Login</button>' +
+        '</div>' +
+        '<div id="captchaStatus" style="margin-top:8px;font-size:12px;color:#3c763d"></div>' +
+      '</div>'
+    document.body.appendChild(overlay)
+
+    var img = document.getElementById('captchaImg')
+    // Forward clicks to the backend as page coordinates. Map from the displayed
+    // (scaled) image to the 1920x1080 page, excluding the border so clicks land
+    // precisely.
+    img.addEventListener('click', function(e) {
+      var rect = this.getBoundingClientRect()
+      var x = Math.round((e.clientX - rect.left - this.clientLeft) * (1920 / this.clientWidth))
+      var y = Math.round((e.clientY - rect.top - this.clientTop) * (1080 / this.clientHeight))
+      x = Math.max(0, Math.min(1919, x))
+      y = Math.max(0, Math.min(1079, y))
+      socket.emit('captchaClick', { requestId: window._pendingCaptchaRequestId, x: x, y: y })
+      this.focus() // keep keyboard focus on the remote screen so typing forwards
+      showCaptchaClickMarker(e.clientX, e.clientY)
+    })
+    // Forward keystrokes so the post-CAPTCHA sign-in form can be typed into.
+    img.addEventListener('keydown', function(e) {
+      var reqId = window._pendingCaptchaRequestId
+      if (!reqId) return
+      if (e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        socket.emit('captchaKey', { requestId: reqId, text: e.key })
+        e.preventDefault()
+      } else if (CAPTCHA_SPECIAL_KEYS[e.key]) {
+        socket.emit('captchaKey', { requestId: reqId, key: CAPTCHA_SPECIAL_KEYS[e.key] })
+        e.preventDefault()
+      }
+    })
+    img.focus()
+  }
+
+  function closeCaptchaOverlay() {
+    var o = document.getElementById('captchaOverlay')
+    if (o) o.remove()
+    window._pendingCaptchaRequestId = null
+  }
+
   socket.on('needCaptcha', function(data) {
     window._pendingCaptchaRequestId = data.requestId
-    if (!$('#informationModal').hasClass('in')) {
-      $('#informationModal').modal('show')
-    }
-    var retryCount = 0
-    var appendInterval = setInterval(function() {
-      var $messages = $('#messages')
-      if ($messages.length > 0) {
-        clearInterval(appendInterval)
-        if ($('#captchaRow').length > 0) return
-        var row = '<div id="captchaRow" class="row" style="background:#fff3cd;padding:8px;margin:10px 0;border-radius:4px;border:1px solid #ffeeba;color:#856404">' +
-          '<div class="col-xs-12">' +
-            '<div style="margin-bottom:8px"><strong><i class="fa fa-shield"></i> Facebook Security Check</strong></div>' +
-            'Click on the image below to solve the CAPTCHA:' +
-            '<div style="margin-top:8px;text-align:center;position:relative;cursor:crosshair">' +
-              '<img id="captchaImg" src="" style="max-width:100%;border:1px solid #ccc;border-radius:4px">' +
-            '</div>' +
-            '<div style="margin-top:8px">' +
-              '<button class="btn btn-success btn-sm" onclick="captchaDone()">Done</button> ' +
-              '<button class="btn btn-default btn-sm" onclick="captchaSkip()">Skip Login</button>' +
-            '</div>' +
-          '</div>' +
-        '</div>'
-        $messages.append(row)
-        $messages.scrollTop($messages[0].scrollHeight)
-
-        // Forward clicks on the image to the backend as page coordinates
-        $('#captchaImg').on('click', function(e) {
-          var rect = this.getBoundingClientRect()
-          var scaleX = 1920 / rect.width
-          var scaleY = 1080 / rect.height
-          var x = Math.round((e.clientX - rect.left) * scaleX)
-          var y = Math.round((e.clientY - rect.top) * scaleY)
-          socket.emit('captchaClick', { requestId: window._pendingCaptchaRequestId, x: x, y: y })
-        })
-      } else if (retryCount++ > 20) {
-        clearInterval(appendInterval)
-      }
-    }, 100)
+    buildCaptchaOverlay()
   })
 
   // Receive screenshot frames from backend
@@ -582,14 +613,85 @@
     }
   })
 
+  // Live scrape view — watch what the headless page sees while a job runs.
+  socket.on('scrapeFrame', function(data) {
+    window._liveViewJobId = data.jobId
+    if (window._liveViewClosed) return
+    var panel = document.getElementById('liveViewPanel')
+    if (!panel) {
+      panel = document.createElement('div')
+      panel.id = 'liveViewPanel'
+      panel.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:99998;width:480px;max-width:46vw;' +
+        'background:#000;border:2px solid #444;border-radius:6px;box-shadow:0 6px 30px rgba(0,0,0,0.5);overflow:hidden'
+      panel.innerHTML =
+        '<div id="liveViewBar" style="display:flex;align-items:center;justify-content:space-between;background:#222;color:#eee;padding:4px 8px;font-size:12px;cursor:move">' +
+          '<span><i class="fa fa-desktop"></i> Live scrape view</span>' +
+          '<span><a href="#" onclick="toggleLiveView(event)" title="Minimize" style="color:#bbb;margin-right:12px;text-decoration:none;font-weight:bold">&minus;</a>' +
+          '<a href="#" onclick="closeLiveView(event)" title="Close" style="color:#bbb;text-decoration:none;font-weight:bold">&times;</a></span>' +
+        '</div>' +
+        '<img id="liveViewImg" style="display:block;width:100%">'
+      document.body.appendChild(panel)
+      makeLiveViewDraggable(panel, document.getElementById('liveViewBar'))
+    }
+    var img = document.getElementById('liveViewImg')
+    if (img) img.src = 'data:image/jpeg;base64,' + data.image
+  })
+  socket.on('scrapeStreamEnd', function(data) {
+    var bar = document.getElementById('liveViewBar')
+    if (bar) bar.querySelector('span').innerHTML = '<i class="fa fa-desktop"></i> Live scrape view (ended)'
+  })
+  window.closeLiveView = function(e) {
+    if (e) e.preventDefault()
+    window._liveViewClosed = true
+    if (window._liveViewJobId) socket.emit('stopScrapeStream', { jobId: window._liveViewJobId })
+    var p = document.getElementById('liveViewPanel')
+    if (p) p.remove()
+  }
+  window.toggleLiveView = function(e) {
+    if (e) e.preventDefault()
+    var img = document.getElementById('liveViewImg')
+    if (img) img.style.display = img.style.display === 'none' ? 'block' : 'none'
+  }
+  function makeLiveViewDraggable(panel, handle) {
+    var dx = 0, dy = 0, dragging = false
+    handle.addEventListener('mousedown', function(e) {
+      dragging = true
+      var rect = panel.getBoundingClientRect()
+      dx = e.clientX - rect.left; dy = e.clientY - rect.top
+      panel.style.right = 'auto'; panel.style.bottom = 'auto'
+      panel.style.left = rect.left + 'px'; panel.style.top = rect.top + 'px'
+      e.preventDefault()
+    })
+    document.addEventListener('mousemove', function(e) {
+      if (!dragging) return
+      panel.style.left = (e.clientX - dx) + 'px'
+      panel.style.top = (e.clientY - dy) + 'px'
+    })
+    document.addEventListener('mouseup', function() { dragging = false })
+  }
+
+  // Brief pulse showing where the last click landed, so the remote click can be
+  // visually confirmed against the streamed frame.
+  window.showCaptchaClickMarker = function(clientX, clientY) {
+    var dot = document.createElement('div')
+    dot.style.cssText = 'position:fixed;left:' + (clientX - 7) + 'px;top:' + (clientY - 7) + 'px;' +
+      'width:14px;height:14px;border:2px solid #d9534f;border-radius:50%;pointer-events:none;' +
+      'z-index:99999;background:rgba(217,83,79,0.25);transition:opacity .6s ease;opacity:1'
+    document.body.appendChild(dot)
+    setTimeout(function() { dot.style.opacity = '0' }, 50)
+    setTimeout(function() { dot.remove() }, 700)
+  }
+
   window.captchaDone = function() {
     socket.emit('manualResponse', { requestId: window._pendingCaptchaRequestId, json: 'done' })
-    $('#captchaRow').replaceWith('<div class="row"><div class="col-xs-12" style="color:#3c763d"><strong><i class="fa fa-check"></i> CAPTCHA submitted — continuing login...</strong></div></div>')
+    var s = document.getElementById('captchaStatus')
+    if (s) s.innerHTML = '<i class="fa fa-check"></i> CAPTCHA submitted — continuing login...'
+    setTimeout(closeCaptchaOverlay, 1200)
   }
 
   window.captchaSkip = function() {
     socket.emit('manualResponse', { requestId: window._pendingCaptchaRequestId, json: 'skip' })
-    $('#captchaRow').replaceWith('<div class="row"><div class="col-xs-12" style="color:#856404"><strong>Login skipped — continuing without authentication</strong></div></div>')
+    closeCaptchaOverlay()
   }
 
   $(function () {

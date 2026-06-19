@@ -245,8 +245,13 @@ function buildCardHtml(listing) {
   var img = listing.picture_url || ''
   var imgHtml = img ? '<img class="grid-card-img" data-src="'+img+'" referrerpolicy="no-referrer">' : '<div class="grid-card-img grid-card-noimg"><i class="fa fa-image"></i></div>'
   var pics = listing.picture_urls || []
-  var photoBtnHtml = pics.length > 1
+  var hasGallery = pics.length > 1
+  var photoBtnHtml = hasGallery
     ? '<button class="btn btn-xs btn-info" onclick="openPhotoGallery(gridListingPhotos(\''+listing._id+'\'))"><i class="fa fa-camera"></i> '+pics.length+'</button>'
+    : ''
+  // Clicking the card image opens the same gallery as the photos button.
+  var imgWrapAttrs = (img && hasGallery)
+    ? ' onclick="openPhotoGallery(gridListingPhotos(\''+listing._id+'\'))" style="cursor:pointer" title="View all photos"'
     : ''
   var details = []
   if(listing.bedrooms) details.push(listing.bedrooms + ' bd')
@@ -270,7 +275,7 @@ function buildCardHtml(listing) {
   }
 
   var html = '<div class="grid-card" data-listingid="'+listing._id+'">'
-  html += '  <div class="grid-card-img-wrap">'+imgHtml+'</div>'
+  html += '  <div class="grid-card-img-wrap"'+imgWrapAttrs+'>'+imgHtml+'</div>'
   html += '  <div class="grid-card-body">'
   html += '    <div class="grid-card-title" title="'+listing.title+'">'+listing.title+'</div>'
   html += '    <div class="grid-card-price">$'+getDisplayPrice(listing)+'</div>'
