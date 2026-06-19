@@ -43,10 +43,10 @@ function buildPopupHtml(listing) {
   var isAirbnb = listing.platform === 'airbnb'
   var isFacebook = listing.platform === 'facebook'
   var isQuintoAndar = listing.platform === 'quintoandar'
-  var visitLabel = isAirbnb ? 'Visit on Airbnb'
-    : isFacebook ? 'Visit on Facebook'
-    : isQuintoAndar ? 'Visit on Quinto Andar'
-    : 'Visit on Kijiji'
+  var visitLabel = isAirbnb ? 'Airbnb'
+    : isFacebook ? 'Facebook'
+    : isQuintoAndar ? 'Quinto Andar'
+    : 'Kijiji'
   var visitUrl = isFacebook ? 'https://www.facebook.com/marketplace/item/' + listing.facebookId + '/' : listing.url
   var html = '<div style="max-width:220px">'
 
@@ -101,7 +101,7 @@ function buildPopupHtml(listing) {
   html += '<div style="margin:4px 0;display:flex;gap:6px;align-items:center">'
   html += '<button class="btn btn-xs" data-listingid="'+listing._id+'" onclick="toggleFavoriteBtn(this)" title="Toggle favorite"><i class="fa fa-heart" style="color:'+favColor+'"></i></button>'
   html += '<button class="btn btn-xs" data-listingid="'+listing._id+'" onclick="toggleDislikeBtn(this)" title="Toggle dislike"><i class="fa fa-thumbs-down" style="color:'+disColor+'"></i></button>'
-  html += '<a onclick="markAsViewed(null, \''+listing.url+'\')" href="'+visitUrl+'" target="_blank">'+visitLabel+'</a>'
+  html += '<a class="btn btn-xs btn-success" onclick="markAsViewed(null, \''+listing.url+'\')" href="'+visitUrl+'" target="_blank"><i class="fa fa-external-link"></i> '+visitLabel+'</a>'
   var seenColor = visitedUrls && visitedUrls.includes(listing.url) ? '#27ae60' : '#ccc'
   html += '<button class="btn btn-xs" data-url="'+listing.url.replace(/"/g,'&quot;')+'" onclick="toggleSeenBtn(this)" title="Toggle seen/unseen"><i class="fa fa-eye" style="color:'+seenColor+'"></i></button>'
   if(listing.lat && listing.lon)

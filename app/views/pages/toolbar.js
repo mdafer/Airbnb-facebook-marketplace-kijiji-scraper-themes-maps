@@ -109,7 +109,8 @@ var toolbarHtml = `
           <!-- Search -->
           <div class="filter-section">
             <label class="filter-label"><i class="fa fa-search"></i> Search Text</label>
-            <input id="searchText" name="searchText" type="text" class="filter-input filter-input-full" placeholder="Keywords, -exclude, &quot;exact phrase&quot;" value="">
+            <input id="searchText" name="searchText" type="text" class="filter-input filter-input-full" placeholder="Keywords, -exclude, -&quot;exclude phrase&quot;, &quot;exact phrase&quot;" value="">
+            <small class="filter-hint">Prefix with <code>-</code> to exclude a word, or <code>-&quot;two words&quot;</code> to exclude a phrase (e.g. <code>-&quot;quarto privado&quot;</code>).</small>
             <label class="filter-checkbox-label">
               <input type="checkbox" id="searchTitleOnly" name="searchTitleOnly" value="true">
               Title only
@@ -253,18 +254,21 @@ function _isMessagesAtBottom() {
   return el.scrollTop + el.clientHeight >= el.scrollHeight - 2
 }
 
-$('#informationModal').on('shown.bs.modal', function() {
+// Delegated on document so it survives renderpage() re-injecting the modal on
+// every navigation — a direct $('#informationModal').on(...) would bind once at
+// script load (before the modal exists) and never fire.
+$(document).off('shown.bs.modal.autoScroll', '#informationModal')
+  .on('shown.bs.modal.autoScroll', '#informationModal', function() {
   // Restore the full log — navigation may have wiped #messages since last open.
   renderInfoMessages()
+  // Scroll events don't bubble, so this must bind directly to #messages (which
+  // now exists). Disable autoscroll the moment the user scrolls up, re-enable it
+  // when they scroll back to the bottom. Programmatic scroll-to-bottom from
+  // addInfoRow() lands at the bottom, so it keeps autoscroll on.
   $('#messages').off('scroll.autoScroll').on('scroll.autoScroll', function() {
     var el = this
-    var isScrollable = el.scrollHeight > el.clientHeight
-    if (!isScrollable) return
-    if (_isMessagesAtBottom()) {
-      $('#autoScroll').prop('checked', true)
-    } else {
-      $('#autoScroll').prop('checked', false)
-    }
+    if (el.scrollHeight <= el.clientHeight) return
+    $('#autoScroll').prop('checked', _isMessagesAtBottom())
   })
 })
 
@@ -382,11 +386,19 @@ function _isJobInCurrentView(listingJobId) {
 }
 
 function _handleNewListing(data) {
-  if(!data || !data.listing || !_isJobInCurrentView(data.jobId)) return
-  var listing = data.listing
-  if(listing.lat == null || listing.lon == null) return
+  // The server emits this as 'newListing' with the doc under `data.listing`
+  // (named "listing", not "ad", so adblockers don't drop the payload).
+  if(!data || !_isJobInCurrentView(data.jobId)) return
+  var listing = data.listing || data.ad
+  if(!listing || listing.lat == null || listing.lon == null) return
   if(_hideDisliked && typeof isDisliked === 'function' && isDisliked(listing._id)) return
   if(typeof _markers !== 'undefined' && _markers.some(function(m){ return m.url === listing.url })) return
+  // Advance the "Last Updated" stamp to this just-scraped ad so the header
+  // reflects realtime arrivals, not only the last full reload. Mirrors the
+  // formatting used in getListingsAsync(). Guard on a string _id since the
+  // socket payload may serialize it differently.
+  if(listing._id && typeof listing._id === 'string' && typeof moment === 'function')
+    lastUpdated = moment(MongoDateFromId(listing._id)).tz("America/Toronto").format("YYYY-MM-DD hh:mm a z")
   if(typeof setMarkersByListings === 'function' && typeof map !== 'undefined' && map) {
     setMarkersByListings(map, [listing], false)
     $('.resultscount').html('Last Updated: '+lastUpdated+', Number of results: '+ _markers.length)

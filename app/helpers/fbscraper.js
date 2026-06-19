@@ -889,15 +889,29 @@ async function fetchListingDetails(listingId) {
 
 			// Pull the full photo set from this listing's embedded JSON — present even
 			// when the gallery never rendered, which is why a DOM-only scrape saved a
-			// single image. Scope to the "listing_photos" array so we don't sweep in
-			// "similar listings" photos lower on the page. The key can appear escaped,
-			// and URIs carry escaped slashes (https:\/\/scontent…).
+			// single image. Scope to EXACTLY this listing's "listing_photos" array by
+			// matching its brackets, so we don't sweep in the seller-info or "similar
+			// listings" photos that sit further down the same payload. URIs carry
+			// escaped slashes (https:\/\/scontent…).
 			{
 				const html = document.documentElement.innerHTML
-				let idx = html.indexOf('"listing_photos"')
-				if (idx === -1) idx = html.indexOf('listing_photos')
-				if (idx !== -1) {
-					const slice = html.slice(idx, idx + 120000)
+				const keyIdx = html.search(/listing_photos"?\s*:\s*\[/)
+				if (keyIdx !== -1) {
+					const arrOpen = html.indexOf('[', keyIdx)
+					// Walk to the matching ] — track depth, ignore brackets inside strings
+					// (URLs and captions), so a nested array or a "]" in text can't end it early.
+					let depth = 0, inStr = false, esc = false, end = -1
+					for (let i = arrOpen; i < html.length && i < arrOpen + 300000; i++) {
+						const ch = html[i]
+						if (inStr) {
+							if (esc) esc = false
+							else if (ch === '\\') esc = true
+							else if (ch === '"') inStr = false
+						} else if (ch === '"') inStr = true
+						else if (ch === '[') depth++
+						else if (ch === ']') { if (--depth === 0) { end = i; break } }
+					}
+					const slice = end !== -1 ? html.slice(arrOpen, end + 1) : html.slice(arrOpen, arrOpen + 60000)
 					const re = /"uri":"(https:\\?\/\\?\/scontent[^"]+?)"/g
 					let mm, added = 0
 					while ((mm = re.exec(slice)) !== null && added < 60) {
@@ -1345,7 +1359,7 @@ module.exports = {
 						Helpers.logger.log({ print: 'Error adding listing to DB: ' + err, channels: params.jobId + 'jobWarning' })
 						return
 					}
-					if (doc && Helpers.io) Helpers.io.emit('newAd', {jobId: params.jobId, ad: doc})
+					if (doc && Helpers.io) Helpers.io.emit('newListing', {jobId: params.jobId, listing: doc})
 				})
 
 				// Delay between detail page fetches

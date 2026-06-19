@@ -129,11 +129,21 @@ module.exports = {
 				positive = []
 
 			vars.searchText = vars.searchText+" "//to match last negative word
+			//separate negative phrases first: -"quarto privado" excludes the whole
+			//multi-word phrase. Must run before the single-word pass below, otherwise
+			//-.+?\s would stop at the first space and only exclude "quarto".
+			vars.searchText = vars.searchText.replace(/-"[^"]+"/g, function(a){
+				negative.push(a.slice(2, -1))//strip leading -" and trailing "
+				return ''
+			})
 			//separate negative keywords
 			vars.searchText = vars.searchText.replace(/-.+?\s/g, function(a, b){//.+? means find until first occurence
 				negative.push(a.substr(1).slice(0, -1))
 				return ''
 			})
+			//escape regex metacharacters so phrases containing ( $ . etc. match
+			//literally and can't throw on an unbalanced paren and break the query
+			let negativeRx = () => negative.map(n => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join("|")
 
 			if(vars.searchTitleOnly)
 			{
@@ -156,7 +166,7 @@ module.exports = {
 				if(negative.length)
 					myfilter.$and.push( {title:
 						{
-							"$not": new RegExp(negative.join("|"), "i")
+							"$not": new RegExp(negativeRx(), "i")
 						}
 					})
 			}
@@ -168,10 +178,10 @@ module.exports = {
 				if(negative.length)
 					myfilter.$and.push( {"$nor": [
 						{
-							title: new RegExp(negative.join("|"), "i")
+							title: new RegExp(negativeRx(), "i")
 						},
 						{
-							description: new RegExp(negative.join("|"), "i")
+							description: new RegExp(negativeRx(), "i")
 						}
 						]
 					})

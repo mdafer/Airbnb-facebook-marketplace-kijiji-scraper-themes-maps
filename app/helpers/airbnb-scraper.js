@@ -1318,7 +1318,7 @@ module.exports = {
 						Helpers.logger.log({print: `Error adding listing to DB: `+ err, channels:params.jobId+'jobWarning'})
 						return
 					}
-					if (doc && Helpers.io) Helpers.io.emit('newAd', {jobId: params.jobId, ad: doc})
+					if (doc && Helpers.io) Helpers.io.emit('newListing', {jobId: params.jobId, listing: doc})
 			    })
 			    return
 			}
