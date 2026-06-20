@@ -144,6 +144,14 @@ function clearMapMarkers(markers='all', removeFromGlobalMarkers=true)
   if(removeFromGlobalMarkers) {
     var removeUrls = new Set(markers.map(function(m){ return m.url }))
     _markers = _markers.filter(function(el){ return !removeUrls.has(el.url) })
+    // Also drop them from the shape-hidden list, else a marker removed while
+    // hidden (e.g. a listing outside the drawn area that drops out when you
+    // lower max price) leaves a stale reference here. applyShapeFilter() re-shows
+    // everything in this list first, resurrecting that marker as a visible orphan
+    // outside the shape — and since it's no longer in _markers, the hide pass
+    // can't catch it, so the area filter looks broken until the shape is edited.
+    if(typeof _markersHiddenByShape !== 'undefined' && _markersHiddenByShape.length)
+      _markersHiddenByShape = _markersHiddenByShape.filter(function(el){ return !removeUrls.has(el.url) })
     if(!_markers.length) { _allAmenities = new Set(); _amenityIdMap = {} }
   }
   $(".resultscount").html('Last Updated: '+lastUpdated+', Number of results: '+ _markers.length)

@@ -444,6 +444,17 @@ function _bindShapeEditListeners(shape) {
     google.maps.event.addListener(shape.getPath(), 'set_at', _debouncedApplyShapeFilter)
     google.maps.event.addListener(shape.getPath(), 'insert_at', _debouncedApplyShapeFilter)
   }
+  // The finished shape is a clickable overlay, so clicks on its fill never reach
+  // the map's click→infowindow.close() listener — the popup stays open when you
+  // click inside the drawn area. Close it here too so behaviour matches clicking
+  // bare map. (Marker clicks land on the marker, above the fill, so its own
+  // open-popup handler still wins.) Guarded so re-binding on restore is a no-op.
+  if(!shape._closeInfoBound) {
+    shape._closeInfoBound = true
+    google.maps.event.addListener(shape, 'click', function(){
+      if(typeof infowindow !== 'undefined' && infowindow) infowindow.close()
+    })
+  }
 }
 
 function startDrawing(){
