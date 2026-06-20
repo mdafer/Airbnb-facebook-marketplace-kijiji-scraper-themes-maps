@@ -566,6 +566,23 @@ function parseQueryParams(query) {
 // --- Persistent settings (localStorage) ---
 var _persistKeys = ['fromPrice','toPrice','fromDate','availableFrom','availableTo','searchText','searchTitleOnly','minBedrooms','minBathrooms','minBeds','minSqMeters','minParking','propertyType','categorySearch','minPhotos','amenities','orAmenities']
 
+// Filters are remembered per search: each saved-filter key is namespaced by the
+// active search (jobId) so switching searches restores that search's own filters
+// (form values, drawn area, favorites-only and hide-disliked toggles) instead of
+// sharing one global set. The cross-search Favorites/Dislikes pages get their own
+// fixed buckets — they don't restore filters, but scoping keeps their saves from
+// clobbering a real search's bucket (jobId lingers in localStorage across pages).
+var _scopedFilterKeys = ['savedFilters','savedShapeGeo','savedFavoritesOnly','savedHideDisliked']
+function _filterScope() {
+	var state = window.currentState
+	if(state === 'favorites') return 'favorites'
+	if(state === 'dislikes') return 'dislikes'
+	return jobId || 'default'
+}
+function _scopedKey(base) {
+	return base + ':' + _filterScope()
+}
+
 function saveFilters() {
 	var filters = {}
 	_persistKeys.forEach(function(key) {
@@ -574,11 +591,13 @@ function saveFilters() {
 		if(el.type === 'checkbox') filters[key] = el.checked ? el.value : ''
 		else filters[key] = el.value || ''
 	})
-	localStorage.setItem('savedFilters', JSON.stringify(filters))
+	localStorage.setItem(_scopedKey('savedFilters'), JSON.stringify(filters))
 }
 
 function restoreFilters() {
-	var raw = localStorage.getItem('savedFilters')
+	// The filters form is re-rendered on each navigation, so a search with no
+	// saved filters simply keeps the fresh (empty) form — no explicit reset needed.
+	var raw = localStorage.getItem(_scopedKey('savedFilters'))
 	if(!raw) return
 	try { var filters = JSON.parse(raw) } catch(e) { return }
 	_persistKeys.forEach(function(key) {
@@ -600,14 +619,28 @@ function restoreFilters() {
 }
 
 function saveShapeGeo() {
-	if(_shapeFilterGeo) localStorage.setItem('savedShapeGeo', JSON.stringify(_shapeFilterGeo))
-	else localStorage.removeItem('savedShapeGeo')
+	if(_shapeFilterGeo) localStorage.setItem(_scopedKey('savedShapeGeo'), JSON.stringify(_shapeFilterGeo))
+	else localStorage.removeItem(_scopedKey('savedShapeGeo'))
 }
 
 function restoreShapeGeo() {
-	var raw = localStorage.getItem('savedShapeGeo')
-	if(!raw) return
-	try { _shapeFilterGeo = JSON.parse(raw) } catch(e) { _shapeFilterGeo = null }
+	// Authoritative: unlike the form (re-rendered each navigation), the drawn shape
+	// lives in JS globals (_drawnShape/_shapeFilterGeo) that linger across pages, so
+	// switching to a search with no saved shape must actively clear the previous
+	// search's overlay — otherwise it would be re-attached by restoreShapeOnMap.
+	var raw = localStorage.getItem(_scopedKey('savedShapeGeo'))
+	_shapeFilterGeo = null
+	if(raw) { try { _shapeFilterGeo = JSON.parse(raw) } catch(e) { _shapeFilterGeo = null } }
+	if(typeof _drawnShape !== 'undefined' && _drawnShape) { _drawnShape.setMap(null); _drawnShape = null }
+	// Reflect this search's shape in the toolbar. On the map the overlay is rebuilt
+	// later by restoreShapeOnMap; on the grid nothing else re-activates the button.
+	if(_shapeFilterGeo) {
+		$('#drawAreaBtn').addClass('btn-primary').removeClass('btn-default')
+		$('#clearShapeBtn').show()
+	} else {
+		$('#drawAreaBtn').removeClass('btn-primary').addClass('btn-default')
+		$('#clearShapeBtn').hide()
+	}
 }
 
 function saveGridMode() {
@@ -631,30 +664,38 @@ function restoreSort() {
 }
 
 function saveFavoritesOnly() {
-	localStorage.setItem('savedFavoritesOnly', _favoritesOnly ? '1' : '')
+	localStorage.setItem(_scopedKey('savedFavoritesOnly'), _favoritesOnly ? '1' : '')
 }
 
 function restoreFavoritesOnly() {
-	_favoritesOnly = !!localStorage.getItem('savedFavoritesOnly')
+	_favoritesOnly = !!localStorage.getItem(_scopedKey('savedFavoritesOnly'))
 }
 
 function saveHideDisliked() {
-	localStorage.setItem('savedHideDisliked', _hideDisliked ? '1' : '0')
+	localStorage.setItem(_scopedKey('savedHideDisliked'), _hideDisliked ? '1' : '0')
 }
 
 function restoreHideDisliked() {
-	var raw = localStorage.getItem('savedHideDisliked')
+	var raw = localStorage.getItem(_scopedKey('savedHideDisliked'))
 	if(raw === null) _hideDisliked = true
 	else _hideDisliked = raw === '1'
 }
 
 function clearSavedSettings() {
-	localStorage.removeItem('savedFilters')
-	localStorage.removeItem('savedShapeGeo')
 	localStorage.removeItem('savedGridMode')
 	localStorage.removeItem('savedSort')
-	localStorage.removeItem('savedFavoritesOnly')
-	localStorage.removeItem('savedHideDisliked')
+	// Filter keys are now per-search (base + ':' + scope), plus any legacy
+	// un-scoped keys from before per-search filters — remove every variant.
+	for(var i = localStorage.length - 1; i >= 0; i--) {
+		var k = localStorage.key(i)
+		if(!k) continue
+		for(var j = 0; j < _scopedFilterKeys.length; j++) {
+			if(k === _scopedFilterKeys[j] || k.indexOf(_scopedFilterKeys[j] + ':') === 0) {
+				localStorage.removeItem(k)
+				break
+			}
+		}
+	}
 }
 
 // Returns the numeric price to display for a listing in the current view.
@@ -804,7 +845,7 @@ function shareCurrentView() {
 }
 
 function hasActiveFilters() {
-	var raw = localStorage.getItem('savedFilters')
+	var raw = localStorage.getItem(_scopedKey('savedFilters'))
 	if(raw) {
 		try {
 			var filters = JSON.parse(raw)
@@ -838,9 +879,9 @@ function clearAllFilters() {
 	_hideDisliked = true
 	saveHideDisliked()
 	$('#dislikeFilterBtn').removeClass('btn-default').addClass('btn-primary')
-	localStorage.removeItem('savedFilters')
-	localStorage.removeItem('savedShapeGeo')
-	localStorage.removeItem('savedFavoritesOnly')
+	localStorage.removeItem(_scopedKey('savedFilters'))
+	localStorage.removeItem(_scopedKey('savedShapeGeo'))
+	localStorage.removeItem(_scopedKey('savedFavoritesOnly'))
 	$('.amenity-filter-bubble.active').not('.amenity-hide').removeClass('active')
 	if(typeof syncAmenityInputs === 'function') syncAmenityInputs()
 	updateFilterIndicator()
@@ -903,7 +944,8 @@ function showAlertModal(title, message) {
 // so drag-to-draw isn't possible — we use clicks instead):
 //   rectangle: click one corner, click the opposite corner
 //   circle:    click the center, click a point on the edge
-//   polygon:   click each vertex, double-click to finish
+//   polygon:   click each vertex, double-click (two quick clicks on the same
+//              spot) to finish — detected manually, see the POLYGON branch.
 var DRAW_MODE = { CIRCLE: 'circle', POLYGON: 'polygon', RECTANGLE: 'rectangle' }
 var _activeDraw = null
 
@@ -912,6 +954,18 @@ function _drawBoundsLiteral(a, b) {
 		north: Math.max(a.lat(), b.lat()), south: Math.min(a.lat(), b.lat()),
 		east: Math.max(a.lng(), b.lng()), west: Math.min(a.lng(), b.lng())
 	}
+}
+
+// True when latLngs `a` and `b` are effectively the same point on screen — used
+// to recognise the second click of a double-click (which lands on the same pixel,
+// so the two latLngs are near-identical) without confusing it for a deliberate,
+// distinct vertex. Tolerance scales with the visible span so it's zoom-independent.
+function _latLngSameSpot(map, a, b) {
+	var bounds = map && map.getBounds && map.getBounds()
+	if(!bounds) return a.equals(b)
+	var span = Math.abs(bounds.getNorthEast().lat() - bounds.getSouthWest().lat()) || 0
+	var tol = span * 0.01
+	return Math.abs(a.lat() - b.lat()) <= tol && Math.abs(a.lng() - b.lng()) <= tol
 }
 
 // Cancel any in-progress draw, discarding its (unfinished) preview overlay.
@@ -930,7 +984,7 @@ function startCustomDraw(map, mode, opts, onComplete) {
 	// updates in choppy jumps). finish() restores clickability on the final shape.
 	var style = Object.assign({ fillColor: '#2196F3', fillOpacity: 0.15, strokeColor: '#2196F3', strokeWeight: 2, clickable: false }, opts || {})
 	var listeners = []
-	var preview = null, anchor = null, polyPath = null
+	var preview = null, anchor = null, polyPath = null, firstMarker = null
 	var prevCursor = map.get('draggableCursor')
 	var prevDblZoom = map.get('disableDoubleClickZoom')
 	map.setOptions({ draggableCursor: 'crosshair', disableDoubleClickZoom: true })
@@ -940,6 +994,8 @@ function startCustomDraw(map, mode, opts, onComplete) {
 		listeners.forEach(function(l){ google.maps.event.removeListener(l) })
 		listeners = []
 		if(preview) { preview.setMap(null); preview = null }
+		// The first-vertex marker is only a drawing aid — always remove it.
+		if(firstMarker) { firstMarker.setMap(null); firstMarker = null }
 		map.setOptions({ draggableCursor: prevCursor || null, disableDoubleClickZoom: !!prevDblZoom })
 	}
 	function finish(shape) {
@@ -976,16 +1032,36 @@ function startCustomDraw(map, mode, opts, onComplete) {
 			if(anchor && preview) preview.setRadius(Math.max(1, google.maps.geometry.spherical.computeDistanceBetween(anchor, e.latLng)))
 		})
 	} else { // POLYGON
-		polyPath = new google.maps.MVCArray()
-		preview = new google.maps.Polygon(Object.assign({}, style, { map: map, paths: polyPath }))
-		// Commit each click as a vertex immediately. A finishing double-click fires
-		// two click events at the same spot (so two near-identical trailing
-		// vertices) followed by dblclick — we drop one duplicate and close.
-		on(map, 'click', function(e){ polyPath.push(e.latLng) })
-		on(map, 'dblclick', function(){
+		// Build the polygon with its OWN path and push vertices onto preview.getPath().
+		// Passing an externally-created *empty* MVCArray as `paths` doesn't work: with
+		// no elements, Google can't infer the path nesting, so it never keeps our
+		// reference — the clicks we pushed never reached the rendered shape, which is
+		// why the polygon drew nothing (circle/rect mutate the preview directly, so
+		// they were unaffected).
+		preview = new google.maps.Polygon(Object.assign({}, style, { map: map }))
+		polyPath = preview.getPath()
+		// Finish by clicking back on the FIRST vertex (its marker) to close the loop.
+		// (Double-click was removed: the native dblclick doesn't fire reliably on the
+		// map here, so it couldn't be used to end the draw.)
+		function closePolygon() {
 			var n = polyPath.getLength()
-			if(n >= 2) polyPath.removeAt(n - 1)
+			if(n >= 2 && polyPath.getAt(n - 1).equals(polyPath.getAt(n - 2))) polyPath.removeAt(n - 1)
 			if(polyPath.getLength() >= 3) finish(preview)
+		}
+		on(map, 'click', function(e){
+			var len = polyPath.getLength()
+			// Clicking on/near the first vertex closes the polygon.
+			if(len >= 3 && _latLngSameSpot(map, e.latLng, polyPath.getAt(0))) { closePolygon(); return }
+			polyPath.push(e.latLng)
+			// Mark the first vertex with a clickable dot so it's obvious where to
+			// click to close the area (the edges alone don't reveal which was first).
+			if(len === 0) {
+				firstMarker = new google.maps.Marker({
+					position: e.latLng, map: map, zIndex: 9999, title: 'Click here to close the area',
+					icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#fff', fillOpacity: 1, strokeColor: '#2196F3', strokeWeight: 3 }
+				})
+				on(firstMarker, 'click', function(){ closePolygon() })
+			}
 		})
 	}
 	_activeDraw = { cleanup: cleanup }

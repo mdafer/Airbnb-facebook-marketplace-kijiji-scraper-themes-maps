@@ -93,7 +93,15 @@ function getListingsAsync(params, centerMapLocation=false)
     var newListings = listingsResult.filter(function(l){ return !markerUrls.has(l.url) })
     if(newListings.length)
       setMarkersByListings(map, newListings, centerMapLocation)
-    $(".resultscount").html('Last Updated: '+lastUpdated+', Number of results: '+ _markers.length || 0)
+    // Re-apply the area filter now that the markers exist. On view restore the shape
+    // is drawn (and applyShapeFilter runs) before listings finish loading async, so
+    // that first pass filtered an empty set — without this, restored markers show
+    // unfiltered. applyShapeFilter sets its own "(area filtered)" results count.
+    if(typeof hasActiveShapeFilter === 'function' && hasActiveShapeFilter() && typeof applyShapeFilter === 'function') {
+      applyShapeFilter()
+    } else {
+      $(".resultscount").html('Last Updated: '+lastUpdated+', Number of results: '+ _markers.length || 0)
+    }
     hideMapLoadingOverlay()
   });
 }

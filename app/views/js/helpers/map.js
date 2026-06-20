@@ -404,7 +404,7 @@ function startDrawing(){
     // Tell the user how the (now click-based) drawing works, since there's no
     // longer a drag-to-draw DrawingManager.
     var hint = mode === DRAW_MODE.POLYGON
-      ? 'Click each corner on the map, then double-click to finish the area.'
+      ? 'Click each corner on the map. To finish, click the dot on your first corner.'
       : 'Click two opposite points on the map to set the area.'
     $('.resultscount').html(hint)
     startCustomDraw(map, mode, { editable: true }, function(overlay){
@@ -444,19 +444,22 @@ function restoreShapeOnMap() {
 function applyShapeFilter(){
   _markersHiddenByShape.forEach(function(m){ m.setMap(map) })
   _markersHiddenByShape = []
-  if(!_drawnShape) return
-  _shapeFilterGeo = _extractShapeGeo(_drawnShape)
-  saveShapeGeo()
+  // Keep _shapeFilterGeo authoritative when the live overlay exists, but DON'T
+  // require it: a socket-triggered refresh can run this while _drawnShape is
+  // momentarily null (e.g. mid-restore). Driving the filter off _shapeFilterGeo
+  // means we never re-show everything and then bail unfiltered.
+  if(_drawnShape) { _shapeFilterGeo = _extractShapeGeo(_drawnShape); saveShapeGeo() }
+  var geo = _shapeFilterGeo
+  if(!geo) return
+  // Build the containment test ONCE (not per marker).
+  var testPoly = geo.type === 'polygon' ? new google.maps.Polygon({ paths: geo.paths }) : null
+  var center = geo.type === 'circle' ? new google.maps.LatLng(geo.lat, geo.lng) : null
   _markers.forEach(function(marker){
     var pos = marker.getPosition()
-    var inside = false
-    if(_drawnShape.getRadius) {
-      inside = google.maps.geometry.spherical.computeDistanceBetween(pos, _drawnShape.getCenter()) <= _drawnShape.getRadius()
-    } else if(_drawnShape.getBounds) {
-      inside = _drawnShape.getBounds().contains(pos)
-    } else {
-      inside = google.maps.geometry.poly.containsLocation(pos, _drawnShape)
-    }
+    var inside
+    if(geo.type === 'circle') inside = google.maps.geometry.spherical.computeDistanceBetween(pos, center) <= geo.radius
+    else if(geo.type === 'rectangle') inside = pos.lat() <= geo.north && pos.lat() >= geo.south && pos.lng() <= geo.east && pos.lng() >= geo.west
+    else inside = google.maps.geometry.poly.containsLocation(pos, testPoly)
     if(!inside && marker.getMap()) {
       marker.setMap(null)
       _markersHiddenByShape.push(marker)
