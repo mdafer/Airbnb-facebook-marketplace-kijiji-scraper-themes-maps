@@ -39,6 +39,59 @@ function updateMarkerIconForListing(listingId) {
     marker.setMap(map)
 }
 
+// Photos for the in-popup carousel / full gallery, keyed by the listing's
+// Mongo _id so it works for every platform (kijiji has no airbnbId/facebookId).
+function getMapListingPhotos(listingId) {
+  var marker = _markers.find(function(mk){ return mk.listingData && mk.listingData._id === listingId })
+  if(!marker) return {urls: [], categories: null}
+  var listing = marker.listingData
+  var urls = (listing.picture_urls && listing.picture_urls.length) ? listing.picture_urls : (listing.picture_url ? [listing.picture_url] : [])
+  return {urls: urls, categories: typeof groupPhotoCategories === 'function' ? groupPhotoCategories(listing.photo_categories) : listing.photo_categories}
+}
+
+function buildMapCarouselHtml(listing) {
+  var urls = (listing.picture_urls && listing.picture_urls.length) ? listing.picture_urls : (listing.picture_url ? [listing.picture_url] : [])
+  if(!urls.length) return '<div class="map-carousel map-carousel-empty"><i class="fa fa-image"></i></div>'
+  var canUpgrade = typeof upgradeQaImageUrl === 'function'
+  var openGallery = 'openPhotoGallery(getMapListingPhotos(\''+listing._id+'\'))'
+  var html = '<div class="map-carousel" data-idx="0">'
+  html += '<div class="map-carousel-track">'
+  urls.forEach(function(u, i){
+    var src = canUpgrade ? upgradeQaImageUrl(u, 'auto') : u
+    // Lazy-load: only the first slide gets a src up front; the rest load as the
+    // user navigates so a popup with 30 photos doesn't fetch them all at once.
+    var srcAttr = i === 0 ? 'src="'+src+'"' : 'data-src="'+src+'"'
+    html += '<img class="map-carousel-img" '+srcAttr+' referrerpolicy="no-referrer" title="Click to view all photos" onclick="'+openGallery+'">'
+  })
+  html += '</div>'
+  if(urls.length > 1) {
+    html += '<button type="button" class="map-carousel-nav map-carousel-prev" onclick="mapCarouselNav(this,-1)" aria-label="Previous photo">&#10094;</button>'
+    html += '<button type="button" class="map-carousel-nav map-carousel-next" onclick="mapCarouselNav(this,1)" aria-label="Next photo">&#10095;</button>'
+    html += '<div class="map-carousel-counter"><i class="fa fa-camera"></i> <span class="map-carousel-cur">1</span>/'+urls.length+'</div>'
+  }
+  html += '</div>'
+  return html
+}
+
+function mapCarouselNav(btn, dir) {
+  var carousel = btn.closest('.map-carousel')
+  if(!carousel) return
+  var track = carousel.querySelector('.map-carousel-track')
+  var imgs = track.children
+  var n = imgs.length
+  if(!n) return
+  var idx = (parseInt(carousel.getAttribute('data-idx') || '0', 10) + dir + n) % n
+  carousel.setAttribute('data-idx', idx)
+  // Load the target slide and the next one in the direction of travel.
+  ;[idx, (idx + dir + n) % n].forEach(function(i){
+    var im = imgs[i]
+    if(im && !im.getAttribute('src') && im.getAttribute('data-src')) im.setAttribute('src', im.getAttribute('data-src'))
+  })
+  track.style.transform = 'translateX(' + (-idx * 100) + '%)'
+  var cur = carousel.querySelector('.map-carousel-cur')
+  if(cur) cur.textContent = (idx + 1)
+}
+
 function buildPopupHtml(listing) {
   var isAirbnb = listing.platform === 'airbnb'
   var isFacebook = listing.platform === 'facebook'
@@ -48,66 +101,62 @@ function buildPopupHtml(listing) {
     : isQuintoAndar ? 'Quinto Andar'
     : 'Kijiji'
   var visitUrl = isFacebook ? 'https://www.facebook.com/marketplace/item/' + listing.facebookId + '/' : listing.url
-  var html = '<div style="max-width:220px">'
 
-  if(listing.picture_url)
-    html += '<img src="'+listing.picture_url+'" style="max-width:200px;max-height:150px;border-radius:4px;margin-bottom:5px" referrerpolicy="no-referrer">'
+  var html = '<div class="map-popup">'
 
-  html += '<h4>'+listing.title+'</h4><h4>$'+getDisplayPrice(listing)+'</h4>'
+  html += buildMapCarouselHtml(listing)
 
-  if(isAirbnb || isFacebook || isQuintoAndar) {
-    var parts = []
-    if(listing.bedrooms) parts.push(listing.bedrooms + ' bd')
-    if(listing.beds) parts.push(listing.beds + ' beds')
-    if(listing.bathrooms) parts.push(listing.bathrooms + ' ba')
-    if(listing.area) parts.push(listing.area + ' m²')
-    if(listing.parkingSpaces) parts.push(listing.parkingSpaces + ' parking')
-    if(parts.length) html += '<p style="margin:2px 0;font-size:12px">'+parts.join(' &middot; ')+'</p>'
+  html += '<div class="map-popup-price">$'+getDisplayPrice(listing)+'</div>'
+  html += '<div class="map-popup-title" title="'+(listing.title || '').replace(/"/g,'&quot;')+'">'+(listing.title || '')+'</div>'
 
-    if(listing.categories && listing.categories.length)
-      html += '<p style="margin:2px 0;font-size:11px;color:#666">'+listing.categories.join(', ')+'</p>'
+  var parts = []
+  if(listing.bedrooms) parts.push(listing.bedrooms + ' bd')
+  if(listing.beds) parts.push(listing.beds + ' beds')
+  if(listing.bathrooms) parts.push(listing.bathrooms + ' ba')
+  var m2 = listing.area || listing.sqMeters
+  if(m2) parts.push(m2 + ' m²')
+  var pk = listing.parkingSpaces != null ? listing.parkingSpaces : listing.parking
+  if(pk) parts.push(pk + ' parking')
+  if(parts.length) html += '<div class="map-popup-meta">'+parts.join(' &middot; ')+'</div>'
 
-    if(listing.amenities && listing.amenities.length) {
-      var hideList = getHideAmenities()
-      var amenitiesForPopup = hideList.length ? listing.amenities.filter(function(a){ return hideList.indexOf(a) === -1 }) : listing.amenities
-      if(amenitiesForPopup.length) {
-        html += '<div style="margin:4px 0;display:flex;flex-wrap:wrap;gap:3px">'
-        amenitiesForPopup.forEach(function(a){ html += '<span class="amenity-bubble">'+a+'</span>' })
-        html += '</div>'
-      }
-      listing.amenities.forEach(function(a){ _allAmenities.add(a) })
-      if(listing.amenityIdMap) Object.assign(_amenityIdMap, listing.amenityIdMap)
+  if(listing.categories && listing.categories.length)
+    html += '<div class="map-popup-cats">'+listing.categories.join(', ')+'</div>'
+
+  if(listing.amenities && listing.amenities.length) {
+    var hideList = getHideAmenities()
+    var amenitiesForPopup = hideList.length ? listing.amenities.filter(function(a){ return hideList.indexOf(a) === -1 }) : listing.amenities
+    if(amenitiesForPopup.length) {
+      html += '<div class="map-popup-amenities">'
+      amenitiesForPopup.forEach(function(a){ html += '<span class="amenity-bubble">'+a+'</span>' })
+      html += '</div>'
     }
-
-    // Photo gallery — use facebookId / airbnbId / quintoandarId as lookup key
-    var listingLookupId = listing.airbnbId || listing.facebookId || listing.quintoandarId
-    var pics = listing.picture_urls || []
-    if(pics.length > 1 && listingLookupId)
-      html += '<button class="btn btn-xs btn-info" style="margin:4px 0;width:100%" onclick="openPhotoGallery(getListingPhotosData(\''+listingLookupId+'\'))">Photos ('+pics.length+')</button>'
-
-    if(isAirbnb) {
-      if(listing.availability)
-        html += '<button class="btn btn-xs btn-warning" style="margin:4px 0;width:100%" onclick="openAvailabilityCalendar(\''+listing._id+'\')"><i class="fa fa-calendar"></i> Availability (12m)</button>'
-      else
-        html += '<button class="btn btn-xs btn-default" style="margin:4px 0;width:100%;opacity:0.6" disabled title="Availability data not yet fetched. Refresh listing to update."><i class="fa fa-calendar-o"></i> Availability</button>'
-    }
-
-    if(listing.seller)
-      html += '<p style="margin:2px 0;font-size:11px;color:#888">Seller: '+listing.seller+'</p>'
+    listing.amenities.forEach(function(a){ _allAmenities.add(a) })
+    if(listing.amenityIdMap) Object.assign(_amenityIdMap, listing.amenityIdMap)
   }
+
+  if(isAirbnb) {
+    if(listing.availability)
+      html += '<button class="btn btn-xs btn-warning map-popup-block" onclick="openAvailabilityCalendar(\''+listing._id+'\')"><i class="fa fa-calendar"></i> Availability (12m)</button>'
+    else
+      html += '<button class="btn btn-xs btn-default map-popup-block" style="opacity:0.6" disabled title="Availability data not yet fetched. Refresh listing to update."><i class="fa fa-calendar-o"></i> Availability</button>'
+  }
+
+  if(listing.seller)
+    html += '<div class="map-popup-seller">Seller: '+listing.seller+'</div>'
 
   var favColor = isFavorite(listing._id) ? '#e74c3c' : '#ccc'
   var disColor = isDisliked(listing._id) ? '#34495e' : '#ccc'
-  html += '<div style="margin:4px 0;display:flex;gap:6px;align-items:center">'
+  var seenColor = visitedUrls && visitedUrls.includes(listing.url) ? '#27ae60' : '#ccc'
+  html += '<div class="map-popup-actions">'
   html += '<button class="btn btn-xs" data-listingid="'+listing._id+'" onclick="toggleFavoriteBtn(this)" title="Toggle favorite"><i class="fa fa-heart" style="color:'+favColor+'"></i></button>'
   html += '<button class="btn btn-xs" data-listingid="'+listing._id+'" onclick="toggleDislikeBtn(this)" title="Toggle dislike"><i class="fa fa-thumbs-down" style="color:'+disColor+'"></i></button>'
   html += '<a class="btn btn-xs btn-success" onclick="markAsViewed(null, \''+listing.url+'\')" href="'+visitUrl+'" target="_blank"><i class="fa fa-external-link"></i> '+visitLabel+'</a>'
-  var seenColor = visitedUrls && visitedUrls.includes(listing.url) ? '#27ae60' : '#ccc'
   html += '<button class="btn btn-xs" data-url="'+listing.url.replace(/"/g,'&quot;')+'" onclick="toggleSeenBtn(this)" title="Toggle seen/unseen"><i class="fa fa-eye" style="color:'+seenColor+'"></i></button>'
   if(listing.lat && listing.lon)
     html += '<a class="btn btn-xs btn-default" href="https://www.google.com/maps/search/?api=1&query='+listing.lat+','+listing.lon+'" target="_blank" title="Open in Google Maps"><i class="fa fa-external-link"></i> GMaps</a>'
   html += '</div>'
-  html += '<button class="btn btn-xs btn-default" style="margin:2px 0;width:100%" onclick="viewInList(\''+listing._id+'\')"><i class="fa fa-list"></i> View in list</button>'
+
+  html += '<button class="btn btn-xs btn-default map-popup-block" onclick="viewInList(\''+listing._id+'\')"><i class="fa fa-list"></i> View in list</button>'
   html += '</div>'
   return html
 }
